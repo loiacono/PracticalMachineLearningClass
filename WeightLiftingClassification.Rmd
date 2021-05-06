@@ -1,0 +1,361 @@
+---
+title: "Qualifying Weight Lifting Workout"
+author: "Luca Lo Iacono"
+date: "5/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+require(dplyr); require(ggplot2); require(GGally); require(caret); require(splines)
+require(formattable); require(gtools); require(compiler); require(parallel);
+require(rlist); require(combinations); require(rattle); require(mclust);
+require(parallel); require(doParallel)
+
+# Number of copies to be run on localhost when paralleling calculations
+copies <- 3
+set.seed(32343)
+
+```
+
+## Executive Summary
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to find a classifier that predicts how well the esercise is performed, using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants as predictors. 
+
+Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways, in particular one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. It was made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz6tnHbqlcO
+
+
+### Acknowledgements
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+
+## Exploratory Data Analysis
+Our goal is to predict the manner in which participants did the exercise. This is the "classe" variable in the training set (pml-training.csv).
+A value for "classe" is not given in pml-testing.csv, for which we have to try a prediciton after having build an effective model.
+
+```{r, , echo = FALSE}
+# Course Quiz data set for training ####
+weight.lifting.data = read.csv("~/Documents/Oppimi/RnD/DG Console/Data/R/PracticalMachineLearningClass/pml-training.csv")
+
+# Removing useless features
+useless.features <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "new_window", "num_window")
+selected.features <- names(weight.lifting.data)[!names(weight.lifting.data) %in% useless.features]
+
+weight.lifting.data <- weight.lifting.data[, selected.features]
+
+# Reformat cvtd_timestamp as Date
+weight.lifting.data$cvtd_timestamp <- as.Date(weight.lifting.data$cvtd_timestamp, tryFormats = c("%d/%m/%Y"))
+
+# Check which features have the same NAs as max_roll_belt (max_roll_belt is just one of the first features with many NAs)
+na.rows <- which(is.na(weight.lifting.data$max_roll_belt))
+
+# Features with many NAs
+features.with.same.nas <- sapply(weight.lifting.data, function(x) identical(which(is.na(x)), na.rows))
+names(weight.lifting.data)[features.with.same.nas]
+
+weight.lifting.data.na.omit.rows <- weight.lifting.data[-na.rows,]
+weight.lifting.data.na.omit.cols <- weight.lifting.data[, -which(features.with.same.nas)]
+
+table(sapply(weight.lifting.data.na.omit.rows, function(x) any(is.na(x))))
+table(sapply(weight.lifting.data.na.omit.cols, function(x) any(is.na(x))))
+
+# Remove features with many NAs
+train.index <- caret::createDataPartition(weight.lifting.data.na.omit.cols$classe, p = 0.7, list = FALSE)
+training <- weight.lifting.data.na.omit.cols[train.index, ]
+testing <- weight.lifting.data.na.omit.cols[-train.index, ]
+
+# Course Quiz data set ####
+weight.lifting.test = read.csv("~/Documents/Oppimi/RnD/DG Console/Data/R/PracticalMachineLearningClass/pml-testing.csv")
+
+weight.lifting.test <- weight.lifting.test[, selected.features[-which(selected.features == "classe")]]
+
+# Reformat cvtd_timestamp as Date
+weight.lifting.test$cvtd_timestamp <- as.Date(weight.lifting.test$cvtd_timestamp, tryFormats = c("%d/%m/%Y"))
+
+# Near zero features
+nvs <- caret::nearZeroVar(training, saveMetrics = TRUE)
+training.near.zero.features <- row.names(nvs[nvs$nzv,])
+
+# Remove near.zero.features
+training.nonvs <- training[-which(names(training) %in% training.near.zero.features)]
+testing.nonvs <- testing[-which(names(testing) %in% training.near.zero.features)]
+
+# Numeric features
+# realnum.features <- list("training.nonvs" = training.nonvs) %>%
+#   handwriting::getRealNumberFeatures()
+# 
+# training.numeric <- training.nonvs[which(names(training.nonvs) %in% realnum.features[[1]])]
+# testing.numeric <- testing.nonvs[which(names(testing.nonvs) %in% realnum.features[[1]])]
+
+# training.numeric <- training.nonvs
+# testing.numeric <- testing.nonvs
+
+# Scaling
+# training.scaled <- as.data.frame(lapply(training.numeric, function(x) (x - mean(x))/sd(x)))
+# testing.scaled <- as.data.frame(sapply(testing.numeric, function(x) (x - mean(x))/sd(x)))
+# 
+# training.scaled <- cbind(training.scaled, "classe" = training$classe)
+# testing.scaled <- cbind(testing.scaled, "classe" = testing$classe)
+
+training.scaled <- training.nonvs
+testing.scaled <- testing.nonvs
+
+weight.lifting.test.nonvs <- weight.lifting.test[-which(names(weight.lifting.test) %in% training.near.zero.features)]
+# weight.lifting.test.numeric <- weight.lifting.test.nonvs[which(names(weight.lifting.test.nonvs) %in% realnum.features[[1]])]
+# weight.lifting.test.numeric <- weight.lifting.test.nonvs
+# weight.lifting.test.scaled <- as.data.frame(lapply(weight.lifting.test.numeric, function(x) (x - mean(x))/sd(x)))
+weight.lifting.test.scaled <- weight.lifting.test.nonvs
+
+
+```
+
+The given data set (pml-training.csv) includes `r dim(weight.lifting.data)[1]` observations of `r dim(weight.lifting.data)[2] -1` variables.
+
+After analyzing the structure of the data set we noticed that some features might be useless.
+Since we are trying to model a classifier that predicts the manner in which exercise are done, the model should be independent from the participants and from workout time.
+Therefore we will not include `r paste0(useless.features, collapse = ", ")` in our model.
+
+Besides we are not going to include variables with too many NAs, such as `r paste0(names(weight.lifting.data)[features.with.same.nas], collapse = ", ")`, which have `r length(na.rows)` NAs out of `r dim(weight.lifting.data)[1]` observations.
+
+And we are not going to include near zero variance predictors, such as `r paste0(useless.features, collapse = ", ")`.
+
+We think it might be interesting to consider the different workout session as a factor because something different might be happended in each of them.
+We thus transform cvtd_timestamp in a factor of four levels, corresponding to four workout days.
+
+## Classifier selection
+
+Since we are trying to build a multiclass classifier using many different predictors we should focus our attention to Trees,, which work well in non linear settings.
+
+We should try three different models and check which performs better on the given data set:
+
+ - Bootstrap Aggregating Model
+ - Ramdom Forest Model
+ - Bosting with Tree Model
+
+We will use 10 fold cross validation to Resampling: Cross-Validated (10 fold) 
+
+
+
+```{r, , echo = FALSE, fig.asp = 0.4}
+# 
+# cols <- 3
+# rowsperpar <- 1
+# plotperpar <- rowsperpar * cols
+# k <- plotperpar
+# features.names <- names(training.scaled)[-which(names(training.scaled) == "classe")]
+# features.names <- features.names[-which(features.names == "cvtd_timestamp")]
+# 
+# # numberofplots <- length(features.names)
+# 
+# # Plot couples of highly correlated variables
+# for (f in features.names) {
+#   if (k == plotperpar) {
+#     par(mfrow = c(rowsperpar, cols))
+#     k <- 1
+#   } else {
+#     k <- k + 1
+#   }
+# 
+#   if (!is.numeric(training.scaled[, f]))
+#     next
+# 
+#   boxplot(as.formula(paste(f, " ~ classe")),
+#           data = training.scaled,
+#           main = paste(f, " vs classe"),
+#           xlab = "classe",
+#           ylab = f,
+#           col = "orange",
+#           border = "brown"
+#   )
+# 
+# }
+# 
+# 
+
+```
+
+### Bootstrap Aggregating Model (TREEBAG)
+
+```{r, , echo = FALSE}
+cl <- parallel::makePSOCKcluster(copies)
+doParallel::registerDoParallel(cl)
+
+model.treebag <- caret::train(classe ~.,
+                              data = training.scaled,
+                              method = "treebag", 
+                              # na.action = na.omit,
+                              preProcess = c("center", "scale"),
+                              trControl = trainControl(method = "cv"), 
+                              verbose = FALSE)
+
+model.treebag
+
+pred.treebag <- predict(model.treebag, testing.scaled)
+
+result.treebag <- predict(model.treebag, weight.lifting.test.scaled)
+
+parallel::stopCluster(cl)
+
+```
+
+#### Confusion Matrix
+
+```{r, , echo = FALSE}
+cm.treebag <- caret::confusionMatrix(pred.treebag, as.factor(testing.scaled$classe))
+cm.treebag
+accuracy.treebag <- cm.treebag$overall["Accuracy"]
+
+```
+
+
+### Ramdom Forest Model (RF)
+
+```{r, , echo = FALSE}
+cl <- parallel::makePSOCKcluster(copies)
+doParallel::registerDoParallel(cl)
+
+model.rf <- caret::train(classe ~.,
+                         data = training.scaled,
+                         method = "rf", 
+                         # na.action = na.omit,
+                         preProcess = c("center", "scale"),
+                         trControl = trainControl(method = "cv"), 
+                         verbose = FALSE)
+
+model.rf
+
+pred.rf <- predict(model.rf, testing.scaled)
+
+result.rf <- predict(model.rf, weight.lifting.test.scaled)
+
+parallel::stopCluster(cl)
+
+```
+
+
+#### Confusion Matrix
+
+```{r, , echo = FALSE}
+cm.rf <- caret::confusionMatrix(pred.rf, as.factor(testing.scaled$classe))
+cm.rf
+accuracy.rf <- cm.rf$overall["Accuracy"]
+
+```
+
+
+### Bosting with Tree Model (GBM)
+
+```{r, , echo = FALSE}
+cl <- parallel::makePSOCKcluster(copies)
+doParallel::registerDoParallel(cl)
+
+model.gbm <- caret::train(classe ~.,
+                          data = training.scaled,
+                          method = "gbm", 
+                          # na.action = na.omit,
+                          preProcess = c("center", "scale"),
+                          verbose = FALSE)
+
+model.gbm
+
+pred.gbm <- predict(model.gbm, testing.scaled)
+
+result.gbm <- predict(model.gbm, weight.lifting.test.scaled)
+
+parallel::stopCluster(cl)
+
+```
+
+
+#### Confusion Matrix
+
+```{r, , echo = FALSE}
+cm.gbm <- caret::confusionMatrix(pred.gbm, as.factor(testing.scaled$classe))
+cm.gbm
+accuracy.gbm <- cm.gbm$overall["Accuracy"]
+
+```
+
+
+## Classifiers Comparison
+
+```{r, , echo = FALSE}
+min.accuracy <- floor(100*min(c(accuracy.treebag, accuracy.rf, accuracy.gbm)))
+msg <- ""
+msg.conclusion <- ""
+
+if (min.accuracy > 90) {
+  msg <- paste0("All the models have an *excellent* accuracy which is greater than ",
+                min.accuracy, 
+                "%.")
+  msg.conclusion <- "Sensitivity and specificity are very good, and these give similar results in predicting out of sample values of *classe*."
+} else if (min.accuracy > 80) {
+  msg <- paste0("All the models have an *good* accuracy which is greater than ",
+                min.accuracy, 
+                "%.")
+  msg.conclusion <- "Sensitivity and specificity are good, and these give similar results in predicting out of sample values of *classe*."
+} else if (min.accuracy > 70) {
+  msg <- paste0("All the models have an *acceptable* accuracy which is greater than ",
+                min.accuracy, 
+                "%.")
+} else {
+  msg <- paste0("All the models have an *poor* accuracy which is greater than ",
+                min.accuracy, 
+                "%.")
+}
+
+accuracy.sd <- sd(c(accuracy.treebag, accuracy.rf, accuracy.gbm))
+msg.sd <- ""
+if (accuracy.sd < 0.05) {
+  msg.sd <- paste0("All the models have a *very similar* accuracy, which means that the three models have similar performances.")
+} else if (accuracy.sd < 0.1) {
+  msg.sd <- paste0("All the models have a *similar* accuracy, which means that the three models have similar performances.")
+    msg.conclusion <- "Sensitivity and specificity are similar, and these give similar results in predicting out of sample values of *classe*."
+} else if (accuracy.sd < 0.5) {
+  msg.sd <- paste0("The models have *not similar* accuracy, which means that the three models have not similar performances.")
+    msg.conclusion <- "Sensitivity and specificity are different, and we need majority voting to predict out of sample values of *classe*."
+} else {
+  msg.sd <- paste0("The models have quite different performance in terms of accuracy.")
+  msg.conclusion <- "Sensitivity and specificity are very different, and we need majority voting to predict out of sample values of *classe*."
+}
+```
+
+We just fitted three different models:
+
+ - Bootstrap Aggregating Model with an accuracy of `r cm.treebag$overall["Accuracy"]`
+ - Ramdom Forest Model with an accuracy of `r cm.rf$overall["Accuracy"]`
+ - Bosting with Tree Model with an accuracy of `r cm.gbm$overall["Accuracy"]`
+
+`r msg`
+
+`r msg.sd`
+
+Here we can see that the prediction of the three models on the "out of sample" data.
+We added a column with a majority vote result to highlight the differences.
+
+
+```{r, , echo = FALSE}
+combined.results <- data.frame(result.treebag, result.rf, result.gbm)
+
+majority.vote <- sapply(as.data.frame(t(combined.results)), 
+                             function(x) mclust::majorityVote(x)$majority)
+
+data.frame(combined.results, majority.vote)
+
+```
+
+
+## Conclusion
+We found three different classifier with an accuracy greater than `r min.accuracy`.
+
+`r msg.sd`
+
+
+
