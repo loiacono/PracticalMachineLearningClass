@@ -95,6 +95,13 @@ Besides we are not going to include variables with too many NAs, such as `r past
 
 And we are not going to include near zero variance predictors, such as `r paste0(useless.features, collapse = ", ")`.
 
+The *in sample* data set looks to be quite balanced in terms of *classe* values:
+
+```{r, , echo = FALSE}
+
+barplot(table(insample.dataset$classe))
+
+```
 
 
 ### Data Partition
