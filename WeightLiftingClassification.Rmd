@@ -14,12 +14,6 @@ require(formattable); require(gtools); require(compiler); require(parallel);
 require(rlist); require(combinations); require(rattle); require(mclust);
 require(parallel); require(doParallel)
 
-computeOOBErrEst <- function(x) {
-  cm <- x$confusion
-  cm <- cm[, -ncol(cm)]
-  1 - sum(diag(cm)) / sum(cm)
-}
-
 # Number of copies to be run on localhost when paralleling calculations
 copies <- 3
 set.seed(32343)
@@ -56,9 +50,6 @@ selected.features <- names(insample.dataset)[!names(insample.dataset) %in% usele
 
 insample.dataset <- insample.dataset[, selected.features]
 
-# Reformat cvtd_timestamp as Date
-# insample.dataset$cvtd_timestamp <- as.factor(as.Date(insample.dataset$cvtd_timestamp, tryFormats = c("%d/%m/%Y")))
-
 # Check which features have the same NAs as max_roll_belt (max_roll_belt is just one of the first features with many NAs)
 na.rows <- which(is.na(insample.dataset$max_roll_belt))
 
@@ -88,9 +79,6 @@ outofsample.dataset = read.csv("~/Documents/Oppimi/RnD/DG Console/Data/R/Practic
 # Remove useless features
 outofsample.dataset <- outofsample.dataset[, selected.features[-which(selected.features == "classe")]]
 
-# Reformat cvtd_timestamp as Date
-# outofsample.dataset$cvtd_timestamp <- as.factor(as.Date(outofsample.dataset$cvtd_timestamp, tryFormats = c("%d/%m/%Y")))
-
 # Remove near.zero.features
 outofsample <- outofsample.dataset[-which(names(outofsample.dataset) %in% near.zero.features)]
 
@@ -107,7 +95,6 @@ Besides we are not going to include variables with too many NAs, such as `r past
 
 And we are not going to include near zero variance predictors, such as `r paste0(useless.features, collapse = ", ")`.
 
-We think it might be interesting to consider the different workout session as a factor because something different might be happended in each of them.
 
 
 ### Data Partition
@@ -127,7 +114,7 @@ We should try three different models and check which performs better on the give
  - Ramdom Forest Model
  - Bosting with Tree Model
 
-We use default bootstrap resampling for all fittings.
+We use **10 fold cross validation** to tune model parameters.
 
 
 ### Bootstrap Aggregating Model (TREEBAG)
@@ -141,7 +128,9 @@ model.treebag <- caret::train(classe ~.,
                               method = "treebag",
                               # na.action = na.omit,
                               # preProcess = c("center", "scale"),
-                              # trControl = trainControl(method = "cv"),
+                              trControl = trainControl(method = "cv"),
+                              OOB = TRUE,
+                              keepX = TRUE,
                               verbose = FALSE)
 
 model.treebag
@@ -153,6 +142,20 @@ result.treebag <- predict(model.treebag, outofsample)
 parallel::stopCluster(cl)
 
 ```
+
+
+#### Final Model
+
+```{r, , echo = FALSE}
+model.treebag$finalModel
+
+estimated.oob <- round(100*(1 - model.treebag$results$Accuracy) , 2)
+
+```
+
+Estimated *out of the bag* error for this model is **`r estimated.oob`%**.
+
+
 
 #### Confusion Matrix
 
@@ -174,7 +177,7 @@ model.rf <- caret::train(classe ~.,
                          method = "rf",
                          # na.action = na.omit,
                          # preProcess = c("center", "scale"),
-                         # trControl = trainControl(method = "cv"),
+                         trControl = trainControl(method = "cv"),
                          verbose = FALSE)
 
 model.rf
@@ -186,6 +189,23 @@ result.rf <- predict(model.rf, outofsample)
 parallel::stopCluster(cl)
 
 ```
+
+#### Final Model
+
+```{r, , echo = FALSE}
+model.rf$finalModel
+
+ntree <- model.rf$finalModel$ntree
+
+plot(model.rf$finalModel$err.rate[1:ntree], 
+     xlab = "Number of Trees", 
+     ylab = "Out of the Bag Error")
+
+estimated.oob <- round(100*model.rf$finalModel$err.rate[ntree], 2)
+
+```
+
+Estimated *out of the bag* error for this model is **`r estimated.oob`%**.
 
 #### Confusion Matrix
 
@@ -207,7 +227,7 @@ model.gbm <- caret::train(classe ~.,
                           method = "gbm", 
                           # na.action = na.omit,
                           # preProcess = c("center", "scale"),
-                          # cv.folds = 10,
+                          trControl = trainControl(method = "cv"),
                           verbose = FALSE)
 
 model.gbm
@@ -219,6 +239,24 @@ result.gbm <- predict(model.gbm, outofsample)
 parallel::stopCluster(cl)
 
 ```
+
+
+#### Final Model
+
+```{r, , echo = FALSE}
+model.gbm$finalModel
+
+ntree <- model.gbm$finalModel$n.trees
+
+plot(model.gbm$finalModel$oobag.improve[1:ntree], 
+     xlab = "Number of Trees", 
+     ylab = "Out of the Bag Error")
+
+estimated.oob <- round(100*model.gbm$finalModel$oobag.improve[ntree], 2)
+
+```
+
+Estimated *out of the bag* error for this model is **`r estimated.oob`%**.
 
 
 #### Confusion Matrix
